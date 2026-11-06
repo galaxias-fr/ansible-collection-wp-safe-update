@@ -1,0 +1,103 @@
+- name: Check WordPress is installed ({{ wp_update_site.name }})
+  ansible.builtin.command:
+    argv: "{{ wp_update__wp_core + ['core', 'is-installed'] }}"
+  register: wp_update__installed
+  changed_when: false
+  failed_when: false
+
+- name: Record missing install ({{ wp_update_site.name }})
+  ansible.builtin.set_fact:
+    wp_update__report: >-
+      {{ wp_update__report | combine({wp_update_site.name: {
+           'status': 'skipped',
+           'reason': 'no WordPress install in ' ~ wp_update_site.path ~ ' (rc ' ~ wp_update__installed.rc ~ '): '
+                     ~ (wp_update__installed.stderr | default('', true) or wp_update__installed.msg | default('')) | trim}}) }}
+  when: wp_update__installed.rc != 0
+
+- name: Preflight checks ({{ wp_update_site.name }})
+  when: wp_update__installed.rc == 0
+  block:
+    - name: Read home URL ({{ wp_update_site.name }})
+      ansible.builtin.command:
+        argv: "{{ wp_update__wp_core + ['option', 'get', 'home'] }}"
+      register: wp_update__home
+      changed_when: false
+      when: wp_update_site.url is not defined
+
+    - name: Set site URL ({{ wp_update_site.name }})
+      ansible.builtin.set_fact:
+        wp_update__url: "{{ wp_update_site.url | default(wp_update__home.stdout | default('')) | trim | regex_replace('/+$', '') }}"
+
+    - name: Baseline smoke test ({{ wp_update_site.name }})
+      ansible.builtin.include_tasks: smoke_test.yml
+      vars:
+        wp_update__smoke_phase: before
+
+    - name: Integrity check ({{ wp_update_site.name }})
+      ansible.builtin.include_tasks: checksums.yml
+      when: wp_update_verify_checksums | bool
+
+    - name: Read core version ({{ wp_update_site.name }})
+      ansible.builtin.command:
+        argv: "{{ wp_update__wp_core + ['core', 'version'] }}"
+      register: wp_update__core_version
+      changed_when: false
+
+    - name: List core updates ({{ wp_update_site.name }})
+      ansible.builtin.command:
+        argv: >-
+          {{ wp_update__wp_core + ['core', 'check-update', '--format=json', '--quiet']
+             + ([] if wp_update_site.core_major | default(wp_update_core_major) | bool else ['--minor']) }}
+      register: wp_update__core_updates
+      changed_when: false
+
+    - name: List plugin updates ({{ wp_update_site.name }})
+      ansible.builtin.command:
+        argv: "{{ wp_update__wp_ext + ['plugin', 'list', '--update=available', '--fields=name,version,update_version', '--format=json'] }}"
+      register: wp_update__plugin_updates
+      changed_when: false
+
+    - name: List theme updates ({{ wp_update_site.name }})
+      ansible.builtin.command:
+        argv: "{{ wp_update__wp_ext + ['theme', 'list', '--update=available', '--fields=name,version,update_version', '--format=json'] }}"
+      register: wp_update__theme_updates
+      changed_when: false
+
+    - name: Record preflight result ({{ wp_update_site.name }})
+      ansible.builtin.set_fact:
+        wp_update__report: >-
+          {{ wp_update__report | combine({wp_update_site.name: {
+               'status': status,
+               'reason': reason,
+               'url': wp_update__url,
+               'core': core,
+               'plugins': plugins,
+               'themes': themes}}) }}
+      vars:
+        # Only the JSON line: PHP notices (WP_DEBUG, display_errors) may come before it
+        core_json: "{{ wp_update__core_updates.stdout_lines | select('match', '\\[') | last | default('[]') }}"
+        # Minor and major releases can both be listed, `core update` installs the major one
+        core: >-
+          {{ ((core_json | from_json | selectattr('update_type', 'eq', 'major') | list) + (core_json | from_json))[:1]
+             | map(attribute='version')
+             | map('regex_replace', '^', wp_update__core_version.stdout | trim ~ ' -> ') | list }}
+        plugin_list: "{{ wp_update__plugin_updates.stdout_lines | select('match', '\\[') | last | default('[]') }}"
+        plugins: >-
+          {{ plugin_list | from_json
+             | rejectattr('name', 'in', wp_update_site.exclude_plugins | default([]))
+             | list }}
+        theme_list: "{{ wp_update__theme_updates.stdout_lines | select('match', '\\[') | last | default('[]') }}"
+        themes: >-
+          {{ theme_list | from_json
+             | rejectattr('name', 'in', wp_update_site.exclude_themes | default([]))
+             | list }}
+        pending: "{{ (core | length) + (plugins | length) + (themes | length) }}"
+        status: >-
+          {{ 'skipped' if wp_update__smoke_errors or wp_update__checksum_errors | default([])
+             else 'pending' if pending | int > 0
+             else 'up-to-date' }}
+        reason: >-
+          {{ 'site failing BEFORE the update: ' ~ wp_update__smoke_errors | join('; ') if wp_update__smoke_errors
+             else 'integrity check failed BEFORE the update (possible compromise): '
+                  ~ wp_update__checksum_errors | join('; ') if wp_update__checksum_errors | default([])
+             else '' }}

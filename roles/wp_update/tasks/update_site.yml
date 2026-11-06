@@ -1,0 +1,64 @@
+# Only what preflight found (minus the excluded plugins/themes) is updated, so the
+# report matches what was done. Translations are always refreshed.
+- name: Enable maintenance mode ({{ wp_update_site.name }})
+  ansible.builtin.command:
+    argv: "{{ wp_update__wp_core + ['maintenance-mode', 'activate'] }}"
+  changed_when: true
+  when: wp_update_maintenance_mode | bool
+
+- name: Update ({{ wp_update_site.name }})
+  vars:
+    wp_update__pending: "{{ wp_update__report[wp_update_site.name] }}"
+  block:
+    - name: Update core ({{ wp_update_site.name }})
+      ansible.builtin.command:
+        argv: >-
+          {{ wp_update__wp_core + ['core', 'update']
+             + ([] if wp_update_site.core_major | default(wp_update_core_major) | bool else ['--minor']) }}
+      changed_when: true
+      when: wp_update__pending.core | length > 0
+
+    - name: Update core database ({{ wp_update_site.name }})
+      ansible.builtin.command:
+        argv: "{{ wp_update__wp_core + ['core', 'update-db'] }}"
+      changed_when: true
+      when: wp_update__pending.core | length > 0
+
+    - name: Update plugins ({{ wp_update_site.name }})
+      ansible.builtin.command:
+        argv: "{{ wp_update__wp_ext + ['plugin', 'update'] + wp_update__pending.plugins | map(attribute='name') | list }}"
+      changed_when: true
+      when: wp_update__pending.plugins | length > 0
+
+    - name: Update themes ({{ wp_update_site.name }})
+      ansible.builtin.command:
+        argv: "{{ wp_update__wp_ext + ['theme', 'update'] + wp_update__pending.themes | map(attribute='name') | list }}"
+      changed_when: true
+      when: wp_update__pending.themes | length > 0
+
+    - name: Update translations ({{ wp_update_site.name }})
+      ansible.builtin.command:
+        argv: "{{ wp_update__wp_ext + ['language', item, 'update'] + ([] if item == 'core' else ['--all']) }}"
+      register: wp_update__translations
+      changed_when: "'up to date' not in wp_update__translations.stdout"
+      loop: [core, plugin, theme]
+
+    - name: Run extra commands ({{ wp_update_site.name }})
+      ansible.builtin.command:
+        argv: "{{ wp_update__wp + (item.split() if item is string else item) }}"
+      changed_when: true
+      loop: "{{ wp_update_site.extra_commands | default([]) }}"
+
+    - name: Flush object cache ({{ wp_update_site.name }})
+      ansible.builtin.command:
+        argv: "{{ wp_update__wp_core + ['cache', 'flush'] }}"
+      changed_when: true
+      when: wp_update_cache_flush | bool
+
+  always:
+    - name: Disable maintenance mode ({{ wp_update_site.name }})
+      ansible.builtin.command:
+        argv: "{{ wp_update__wp_core + ['maintenance-mode', 'deactivate'] }}"
+      changed_when: true
+      failed_when: false
+      when: wp_update_maintenance_mode | bool

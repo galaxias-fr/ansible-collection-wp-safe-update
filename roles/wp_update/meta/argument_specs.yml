@@ -1,0 +1,165 @@
+argument_specs:
+  main:
+    short_description: Update WordPress sites behind a VM snapshot, roll back on failure
+    description:
+      - Updates WordPress core, plugins, themes and translations with WP-CLI on every site of a host.
+      - Takes a Proxmox VE snapshot of the VM or container first, verifies the sites after the update
+        and rolls the whole VM back if one of them is broken.
+      - See defaults/main.yml for commented examples.
+    author:
+      - Simon Van Accoleyen (@SimonVanacco)
+    options:
+      wp_update_sites:
+        type: list
+        elements: dict
+        default: []
+        description:
+          - WordPress sites hosted on the machine (one host = one VM or container).
+          - "Required keys: C(name) ([A-Za-z0-9_-]), C(path) (WordPress root), C(user) (owner of the files, WP-CLI runs as this user)."
+          - "Optional keys: C(url) (smoke test base URL, defaults to the home option), C(state) (C(absent) skips the site),
+            C(core_major), C(exclude_plugins), C(exclude_themes), C(checksum_exclude_plugins),
+            C(smoke_checks) (overrides O(wp_update_smoke_checks)), C(extra_commands)."
+          - Unknown keys are ignored, so an existing list describing the sites can be reused as is.
+      wp_update_dry_run:
+        type: bool
+        default: false
+        description: Only list the pending updates, change nothing.
+      wp_update_wpcli_path:
+        type: str
+        default: wp
+        description: WP-CLI executable on the host.
+      wp_update_command_timeout:
+        type: int
+        default: 900
+        description:
+          - Maximum duration in seconds of each task running on the host (WP-CLI, database dumps, smoke tests).
+          - A hung command fails the task, and triggers the rollback during the update. The process left on the host is not killed.
+      wp_update_load_plugins:
+        type: bool
+        default: true
+        description:
+          - List and update plugins and themes with plugins loaded, so premium plugins with their own updater are updated too.
+          - When false, every WP-CLI command runs with C(--skip-plugins --skip-themes).
+      wp_update_core_major:
+        type: bool
+        default: true
+        description: Allow major core releases. When false, only minor releases are installed.
+      wp_update_maintenance_mode:
+        type: bool
+        default: true
+        description: Enable maintenance mode while each site is updated.
+      wp_update_cache_flush:
+        type: bool
+        default: true
+        description: Flush the object cache after updating.
+      wp_update_reload_services:
+        type: list
+        elements: str
+        default: []
+        description: Services reloaded after the updates, for example C(php8.3-fpm) with C(opcache.validate_timestamps=0).
+      wp_update_verify_checksums:
+        type: bool
+        default: true
+        description:
+          - Run C(wp core/plugin verify-checksums) before the update (a mismatch skips the site) and after it (a mismatch triggers the rollback).
+      wp_update_checksum_exclude_plugins:
+        type: list
+        elements: str
+        default: [hello]
+        description: Plugins never checksum-verified, merged with each site's C(checksum_exclude_plugins).
+      wp_update_db_backup:
+        type: bool
+        default: true
+        description: Take a gzipped C(wp db export) of each site before the snapshot. Only the latest dump is kept.
+      wp_update_db_backup_dir:
+        type: path
+        default: /var/backups/wp-safe-update
+        description: Directory of the database dumps on the host.
+      wp_update_smoke_checks:
+        type: list
+        elements: dict
+        default: [{path: /, contains: "</html>"}]
+        description:
+          - Pages requested from the controller before the update, after it and after a rollback.
+          - Each item has a C(path), and optionally C(status) (default 200) and C(contains).
+      wp_update_smoke_fail_patterns:
+        type: list
+        elements: str
+        description: A smoke check fails if the page contains one of these strings.
+      wp_update_smoke_timeout:
+        type: int
+        default: 30
+        description: Timeout of each smoke check request, in seconds.
+      wp_update_smoke_validate_certs:
+        type: bool
+        default: true
+        description: Validate TLS certificates during the smoke tests.
+      wp_update_smoke_headers:
+        type: dict
+        default: {}
+        description: HTTP headers sent with the smoke checks, for example C(Authorization). Their output is hidden when set.
+      wp_update_snapshot_provider:
+        type: str
+        default: proxmox
+        choices: [proxmox, none]
+        description: C(none) runs the same checks and updates without a snapshot, failures are only reported.
+      wp_update_snapshot_prefix:
+        type: str
+        default: wp-safe-update-
+        description: Snapshot name prefix. Older snapshots with this prefix are removed once the new one is taken.
+      wp_update_rollback_timeout:
+        type: int
+        default: 600
+        description: How long to wait for the host to come back after a rollback, in seconds.
+      wp_update_proxmox_api_host:
+        type: str
+        default: ""
+        description: Proxmox VE API host. Empty settings fall back to the C(PROXMOX_*) environment variables.
+      wp_update_proxmox_api_port:
+        type: raw
+        default: ""
+        description: Proxmox VE API port.
+      wp_update_proxmox_api_user:
+        type: str
+        default: ""
+        description: Proxmox VE API user, for example C(ansible@pve).
+      wp_update_proxmox_api_token_id:
+        type: str
+        default: ""
+        description: Proxmox VE API token ID.
+      wp_update_proxmox_api_token_secret:
+        type: str
+        default: ""
+        no_log: true
+        description: Proxmox VE API token secret.
+      wp_update_proxmox_api_password:
+        type: str
+        default: ""
+        no_log: true
+        description: Proxmox VE API password, when not using a token.
+      wp_update_proxmox_validate_certs:
+        type: bool
+        default: true
+        description: Validate the Proxmox VE API certificate.
+      wp_update_proxmox_ca_path:
+        type: str
+        default: ""
+        description: CA bundle used to validate the Proxmox VE API certificate.
+      wp_update_proxmox_timeout:
+        type: int
+        default: 300
+        description: Timeout of Proxmox VE tasks (snapshot, rollback, start), in seconds.
+      wp_update_proxmox_vmid:
+        type: raw
+        description: VM or container ID. Defaults to C(proxmox_vmid), set by the community.proxmox inventory plugin.
+      wp_update_proxmox_name:
+        type: str
+        description: VM or container name, used when no ID is set. Defaults to C(inventory_hostname).
+      wp_update_proxmox_vmstate:
+        type: bool
+        default: false
+        description: Include the RAM in the snapshot (VMs only). Slower and bigger, the rollback resumes the running VM.
+      wp_update_report_dir:
+        type: str
+        default: ""
+        description: Write a JSON report per host and run into this absolute directory on the controller.

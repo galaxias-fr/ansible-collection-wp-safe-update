@@ -1,0 +1,37 @@
+- name: Build report
+  ansible.builtin.set_fact:
+    wp_update__summary:
+      host: "{{ inventory_hostname }}"
+      run: "{{ wp_update__ts }}"
+      dry_run: "{{ wp_update_dry_run | bool }}"
+      snapshot: "{{ wp_update__snapshot or none }}"
+      failure: "{{ wp_update__failure or none }}"
+      rolled_back: "{{ wp_update__rolled_back }}"
+      sites: "{{ wp_update__report }}"
+
+- name: Report
+  ansible.builtin.debug:
+    var: wp_update__summary
+
+# Never fails the host: the update itself is done at this point
+- name: Write JSON report
+  when: wp_update_report_dir | length > 0
+  delegate_to: localhost
+  become: false
+  block:
+    - name: Create report directory
+      ansible.builtin.file:
+        path: "{{ wp_update_report_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Write JSON report
+      ansible.builtin.copy:
+        content: "{{ wp_update__summary | to_nice_json }}\n"
+        dest: "{{ wp_update_report_dir }}/{{ inventory_hostname }}-{{ wp_update__ts }}.json"
+        mode: "0644"
+
+  rescue:
+    - name: Report could not be written
+      ansible.builtin.debug:
+        msg: "WARNING: report not written to {{ wp_update_report_dir }}: {{ ansible_failed_result.msg | default('?') }}"

@@ -1,0 +1,15 @@
+- name: Set site URL ({{ wp_update_site.name }})
+  ansible.builtin.set_fact:
+    wp_update__url: "{{ wp_update__report[wp_update_site.name].url }}"
+
+- name: Smoke test after rollback ({{ wp_update_site.name }})
+  ansible.builtin.include_tasks: smoke_test.yml
+  vars:
+    wp_update__smoke_phase: rollback
+
+- name: Record rollback result ({{ wp_update_site.name }})
+  ansible.builtin.set_fact:
+    wp_update__report: >-
+      {{ wp_update__report | combine({wp_update_site.name: {
+           'status': 'rolled back' if not wp_update__smoke_errors else 'BROKEN after rollback',
+           'rollback_errors': wp_update__smoke_errors}}, recursive=true) }}

@@ -1,0 +1,39 @@
+# Core updates and checks run with --skip-plugins --skip-themes: loading the whole site
+# is what catches a PHP fatal error in an updated plugin or theme
+- name: Load WordPress with plugins and theme ({{ wp_update_site.name }})
+  ansible.builtin.command:
+    argv: "{{ wp_update__wp + ['eval', 'echo \"wp-safe-update-loaded\";'] }}"
+  register: wp_update__load
+  changed_when: false
+  failed_when: false
+
+- name: Set site URL ({{ wp_update_site.name }})
+  ansible.builtin.set_fact:
+    wp_update__url: "{{ wp_update__report[wp_update_site.name].url }}"
+
+- name: Smoke test after update ({{ wp_update_site.name }})
+  ansible.builtin.include_tasks: smoke_test.yml
+  vars:
+    wp_update__smoke_phase: after
+
+- name: Integrity check after update ({{ wp_update_site.name }})
+  ansible.builtin.include_tasks: checksums.yml
+  when: wp_update_verify_checksums | bool
+
+- name: Record verification result ({{ wp_update_site.name }})
+  ansible.builtin.set_fact:
+    wp_update__report: >-
+      {{ wp_update__report | combine({wp_update_site.name: {
+           'status': 'failed' if errors else 'updated',
+           'reason': errors | join('; ')}}, recursive=true) }}
+  vars:
+    errors: >-
+      {{ ([] if 'wp-safe-update-loaded' in wp_update__load.stdout
+          else ['WP-CLI cannot load the site: ' ~ (wp_update__load.stderr_lines | last | default('rc ' ~ wp_update__load.rc))])
+         + wp_update__smoke_errors
+         + (wp_update__checksum_errors if wp_update_verify_checksums | bool else []) }}
+
+- name: Fail on broken site ({{ wp_update_site.name }})
+  ansible.builtin.fail:
+    msg: "{{ wp_update_site.name }}: {{ wp_update__report[wp_update_site.name].reason }}"
+  when: wp_update__report[wp_update_site.name].status == 'failed'

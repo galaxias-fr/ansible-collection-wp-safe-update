@@ -1,0 +1,33 @@
+- name: Create backup directory
+  ansible.builtin.file:
+    path: "{{ wp_update_db_backup_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+# Dumped by the site user to stdout, written by root: the site user can't read the dumps
+- name: Export database ({{ wp_update_site.name }})
+  ansible.builtin.shell: |
+    set -o pipefail
+    {{ wp_update__wp_core | map('quote') | join(' ') }} db export - --single-transaction | gzip > {{ dest | quote }}
+  args:
+    executable: /bin/bash
+  vars:
+    dest: "{{ wp_update_db_backup_dir }}/{{ wp_update_site.name }}-{{ wp_update__ts }}.sql.gz"
+  changed_when: true
+
+- name: Find previous dumps ({{ wp_update_site.name }})
+  ansible.builtin.find:
+    paths: "{{ wp_update_db_backup_dir }}"
+    patterns: "{{ wp_update_site.name }}-*.sql.gz"
+    excludes: "{{ wp_update_site.name }}-{{ wp_update__ts }}.sql.gz"
+  register: wp_update__old_dumps
+
+- name: Remove previous dumps ({{ wp_update_site.name }})
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ wp_update__old_dumps.files }}"
+  loop_control:
+    label: "{{ item.path | basename }}"

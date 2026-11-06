@@ -1,0 +1,31 @@
+namespace: galaxias
+name: wp_safe_update
+version: 0.1.0
+readme: README.md
+authors:
+  - Simon Van Accoleyen (@SimonVanacco)
+description: >-
+  Update WordPress sites (core, plugins, themes, translations) with WP-CLI behind a
+  Proxmox VE snapshot, smoke test them and roll the VM back if anything breaks.
+license:
+  - GPL-3.0-or-later
+tags:
+  - application
+  - wordpress
+  - wpcli
+  - proxmox
+  - snapshot
+  - update
+  - rollback
+dependencies:
+  community.proxmox: ">=1.5.0,<3.0.0"
+repository: https://github.com/galaxias-fr/ansible-collection-wp-safe-update
+documentation: https://github.com/galaxias-fr/ansible-collection-wp-safe-update#readme
+issues: https://github.com/galaxias-fr/ansible-collection-wp-safe-update/issues
+build_ignore:
+  - .github
+  - .idea
+  - .gitignore
+  - .ansible-lint
+  - "*.tar.gz"
+  - tests/output

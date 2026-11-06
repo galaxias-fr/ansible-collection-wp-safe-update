@@ -1,0 +1,3 @@
+- name: No snapshot
+  ansible.builtin.debug:
+    msg: "wp_update_snapshot_provider is none: no snapshot, a failed update will NOT be rolled back"

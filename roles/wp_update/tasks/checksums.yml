@@ -1,0 +1,38 @@
+# In: wp_update_site
+# Out: wp_update__checksum_errors
+- name: Verify core checksums ({{ wp_update_site.name }})
+  ansible.builtin.command:
+    argv: "{{ wp_update__wp_core + ['core', 'verify-checksums'] }}"
+  register: wp_update__core_checksums
+  changed_when: false
+  failed_when: false
+
+# Plugins not hosted on wordpress.org have no checksums: WP-CLI warns and skips them,
+# only real mismatches end up in the JSON output
+- name: Verify plugin checksums ({{ wp_update_site.name }})
+  ansible.builtin.command:
+    argv: >-
+      {{ wp_update__wp_core + ['plugin', 'verify-checksums', '--all', '--format=json', '--quiet']
+         + (['--exclude=' ~ exclude | join(',')] if exclude else []) }}
+  vars:
+    exclude: "{{ wp_update_checksum_exclude_plugins + wp_update_site.checksum_exclude_plugins | default([]) }}"
+  register: wp_update__plugin_checksums
+  changed_when: false
+  failed_when: false
+
+- name: Collect checksum errors ({{ wp_update_site.name }})
+  ansible.builtin.set_fact:
+    wp_update__checksum_errors: >-
+      {%- set out = [] -%}
+      {%- if wp_update__core_checksums.rc != 0 -%}
+      {%-   set warnings = wp_update__core_checksums.stderr_lines | select('match', '^Warning:') | list -%}
+      {%-   for line in warnings or [wp_update__core_checksums.stderr | trim] -%}
+      {%-     set _ = out.append('core: ' ~ line | regex_replace('^Warning: ', '')) -%}
+      {%-   endfor -%}
+      {%- endif -%}
+      {%- for m in plugin_json | from_json -%}
+      {%-   set _ = out.append(m.plugin_name ~ ': ' ~ m.message ~ ' ' ~ m.file) -%}
+      {%- endfor -%}
+      {{ out }}
+  vars:
+    plugin_json: "{{ wp_update__plugin_checksums.stdout_lines | select('match', '\\[') | last | default('[]') }}"

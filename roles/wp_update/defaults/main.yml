@@ -1,0 +1,119 @@
+# WordPress sites hosted on the machine (one host = one VM/container)
+#
+# wp_update_sites:
+#   - name: blog                       # required, [A-Za-z0-9_-]
+#     path: /var/www/blog              # required, WordPress root (where wp-load.php lives)
+#     user: www-data                   # required, owner of the files, WP-CLI runs as this user
+#     url: https://blog.example.com    # optional, smoke test base URL, defaults to the "home" option
+#     state: present                   # optional, "absent" skips the site
+#     core_major: true                 # optional, overrides wp_update_core_major
+#     exclude_plugins: [woocommerce]   # optional, plugins never updated by this role
+#     exclude_themes: []               # optional, themes never updated by this role
+#     checksum_exclude_plugins: []     # optional, added to wp_update_checksum_exclude_plugins
+#     smoke_checks:                    # optional, overrides wp_update_smoke_checks
+#       - path: /
+#         contains: "</html>"
+#       - path: /shop/
+#         status: 200
+#     extra_commands:                  # optional, WP-CLI commands run after the updates, with plugins loaded
+#       - wc update                    # a string is split on spaces, no shell quoting
+#       - [option, update, blogdescription, "Just another site"]   # a list of args for anything quoted
+#
+# Unknown keys are ignored, so an existing list describing the sites can be reused as is.
+wp_update_sites: []
+
+# Only list the pending updates, change nothing
+wp_update_dry_run: false
+
+wp_update_wpcli_path: wp
+
+# Maximum duration of each task running on the host (WP-CLI commands, database dumps,
+# smoke tests): a hung command fails instead of blocking the run. The process left on the
+# host is not killed.
+wp_update_command_timeout: 900
+
+# Plugins and themes are listed/updated with plugins loaded, so that premium plugins
+# shipping their own updater (not on wordpress.org) are updated too.
+# Set to false to run every WP-CLI command with --skip-plugins --skip-themes.
+wp_update_load_plugins: true
+
+# false: only minor core releases (6.8.1 -> 6.8.2)
+wp_update_core_major: true
+
+# Visitors get the "Briefly unavailable" page while a site is updated
+wp_update_maintenance_mode: true
+
+# Flush the object cache (Redis, Memcached...) after updating
+wp_update_cache_flush: true
+
+# Services reloaded after the updates, e.g. [php8.3-fpm] when opcache.validate_timestamps=0
+wp_update_reload_services: []
+
+# wp core/plugin verify-checksums before (a mismatch skips the site: possible compromise)
+# and after the update (a mismatch triggers the rollback)
+wp_update_verify_checksums: true
+# Plugins never checksum-verified, merged with each site's checksum_exclude_plugins.
+# hello: the Hello Dolly copy bundled with core differs from the wordpress.org one.
+wp_update_checksum_exclude_plugins: [hello]
+
+# gzipped `wp db export` taken before the snapshot, the previous dump is removed.
+# Needs mysqldump/mariadb-dump on the host. This is the only safety net with
+# wp_update_snapshot_provider: none, or when the database lives on another machine.
+wp_update_db_backup: true
+wp_update_db_backup_dir: /var/backups/wp-safe-update
+
+# Smoke tests, run from the controller (as a visitor would) before the update
+# (a failing site is skipped), after the update and after a rollback.
+# A cache-busting query string is added to every path.
+wp_update_smoke_checks:
+  - path: /
+    contains: "</html>"
+# A check also fails if the page contains one of these. WordPress answers 500 on a fatal
+# error and 503 in maintenance mode whatever the language, these catch the rest.
+wp_update_smoke_fail_patterns:
+  - There has been a critical error
+  - Briefly unavailable for scheduled maintenance
+  - Error establishing a database connection
+  - "Fatal error:"
+  - "Parse error:"
+wp_update_smoke_timeout: 30
+wp_update_smoke_validate_certs: true
+# e.g. {Authorization: "Basic ..."} for a site behind basic auth
+wp_update_smoke_headers: {}
+
+# proxmox: snapshot the VM/container, roll it back on failure
+# none: no snapshot, failures are only reported (testing, or hosts outside Proxmox)
+wp_update_snapshot_provider: proxmox
+
+# Snapshots are named <prefix><UTC timestamp>. The snapshot of a run is kept until the
+# next run, which removes every older snapshot with this prefix once its own one is taken.
+wp_update_snapshot_prefix: wp-safe-update-
+
+# How long to wait for the host to come back after a rollback (seconds)
+wp_update_rollback_timeout: 600
+
+# Proxmox VE API, empty values fall back to the PROXMOX_* environment variables
+# (PROXMOX_HOST, PROXMOX_USER, PROXMOX_TOKEN_ID, PROXMOX_TOKEN_SECRET...)
+wp_update_proxmox_api_host: ""
+wp_update_proxmox_api_port: ""
+wp_update_proxmox_api_user: ""
+wp_update_proxmox_api_token_id: ""
+wp_update_proxmox_api_token_secret: ""
+wp_update_proxmox_api_password: ""
+wp_update_proxmox_validate_certs: true
+wp_update_proxmox_ca_path: ""
+wp_update_proxmox_timeout: 300
+
+# The VM/container is found by ID (set by the community.proxmox inventory plugin),
+# or else by name
+wp_update_proxmox_vmid: "{{ proxmox_vmid | default('') }}"
+wp_update_proxmox_name: "{{ inventory_hostname }}"
+
+# Include the RAM in the snapshot: the rollback resumes the running VM instead of
+# booting it, but the snapshot is slower and much bigger. Not available for containers.
+wp_update_proxmox_vmstate: false
+
+# Write a JSON report per host and run into this directory (absolute path) on the controller,
+# the machine running Ansible, as the user running Ansible (no become).
+# A report that can't be written only gives a warning.
+wp_update_report_dir: ""

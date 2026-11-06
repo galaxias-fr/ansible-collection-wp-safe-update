@@ -1,0 +1,33 @@
+- name: Proxmox rollback
+  delegate_to: localhost
+  become: false
+  module_defaults:
+    group/community.proxmox.proxmox: "{{ wp_update__proxmox_api }}"
+  block:
+    - name: Roll back to {{ wp_update__snapshot }}
+      community.proxmox.proxmox_snap:
+        vmid: "{{ wp_update__vm.vmid }}"
+        snapname: "{{ wp_update__snapshot }}"
+        timeout: "{{ wp_update_proxmox_timeout }}"
+        state: rollback
+
+    # Without the RAM in the snapshot, the VM is stopped after a rollback
+    - name: Start the VM
+      community.proxmox.proxmox_kvm:
+        vmid: "{{ wp_update__vm.vmid }}"
+        node: "{{ wp_update__vm.node }}"
+        timeout: "{{ wp_update_proxmox_timeout }}"
+        state: started
+      when: wp_update__vm.type == 'qemu'
+
+    - name: Start the container
+      community.proxmox.proxmox:
+        vmid: "{{ wp_update__vm.vmid }}"
+        node: "{{ wp_update__vm.node }}"
+        timeout: "{{ wp_update_proxmox_timeout }}"
+        state: started
+      when: wp_update__vm.type == 'lxc'
+
+    - name: Remember the rollback
+      ansible.builtin.set_fact:
+        wp_update__rolled_back: true

@@ -1,0 +1,5 @@
+- name: No rollback
+  ansible.builtin.debug:
+    msg: >-
+      No snapshot to roll back to.
+      {{ 'Database dumps are in ' ~ wp_update_db_backup_dir ~ '.' if wp_update_db_backup | bool else '' }}

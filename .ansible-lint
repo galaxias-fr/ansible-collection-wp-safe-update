@@ -1,0 +1,6 @@
+profile: production
+skip_list:
+  # Task names end with "(<site name>)" so looped includes stay readable
+  - name[template]
+exclude_paths:
+  - .github/

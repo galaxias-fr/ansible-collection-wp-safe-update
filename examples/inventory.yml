@@ -1,0 +1,39 @@
+# Static inventory example. With the community.proxmox inventory plugin, proxmox_vmid
+# is set for every VM and wp_update_proxmox_vmid can be left out.
+wordpress:
+  hosts:
+    web1:
+      ansible_host: 192.0.2.10
+      wp_update_proxmox_vmid: 101
+      wp_update_sites:
+        - name: blog
+          path: /var/www/blog
+          user: blog
+        - name: shop
+          path: /var/www/shop
+          user: shop
+          url: https://shop.example.com
+          exclude_plugins: [woocommerce]       # updated by hand after testing on staging
+          checksum_exclude_plugins: [my-fork]  # locally patched plugin
+          smoke_checks:
+            - path: /
+              contains: "</html>"
+            - path: /cart/
+            - path: /wp-json/
+              contains: '"namespaces"'
+          extra_commands:
+            - wc update
+    web2:
+      ansible_host: 192.0.2.11
+      wp_update_snapshot_provider: none        # not on Proxmox: update + report only
+      wp_update_sites:
+        - name: www
+          path: /srv/www
+          user: www-data
+
+  vars:
+    wp_update_proxmox_api_host: pve.example.com
+    wp_update_proxmox_api_user: ansible@pve
+    wp_update_proxmox_api_token_id: wp-safe-update
+    wp_update_proxmox_api_token_secret: "{{ vault_wp_update_proxmox_token_secret }}"
+    wp_update_report_dir: "{{ playbook_dir }}/reports"   # on the controller

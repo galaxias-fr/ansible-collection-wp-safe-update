@@ -1,0 +1,115 @@
+# Types and choices are checked by meta/argument_specs.yml, the sites' keys here
+- name: Check wp_update_sites is set
+  ansible.builtin.assert:
+    that: wp_update_sites | length > 0
+    fail_msg: "wp_update_sites is empty for {{ inventory_hostname }}"
+    quiet: true
+
+- name: Validate wp_update_sites
+  ansible.builtin.assert:
+    that:
+      - item.name is defined
+      - item.name is match('^[A-Za-z0-9_-]+$')
+      - item.state | default('present') == 'absent' or (item.path is defined and item.user is defined)
+    fail_msg: "Each site needs a name ([A-Za-z0-9_-]), a path and a user"
+    quiet: true
+  loop: "{{ wp_update_sites }}"
+  loop_control:
+    label: "{{ item.name | default('?') }}"
+
+- name: Initialize run state
+  ansible.builtin.set_fact:
+    wp_update__ts: "{{ now(utc=true, fmt='%Y%m%d-%H%M%S') }}"
+    # Sites without state: absent, in the order of wp_update_sites
+    wp_update__sites: >-
+      {{ wp_update_sites
+         | reject('in', wp_update_sites | selectattr('state', 'defined') | selectattr('state', 'eq', 'absent') | list)
+         | list }}
+    wp_update__report: {}
+    wp_update__snapshot: ""
+    wp_update__failed: false
+    wp_update__failure: ""
+    wp_update__rolled_back: false
+
+# Baseline smoke test, integrity check and pending updates of every site
+- name: Preflight
+  timeout: "{{ wp_update_command_timeout }}"
+  block:
+    - name: Preflight
+      ansible.builtin.include_tasks: preflight.yml
+      loop: "{{ wp_update__sites }}"
+      loop_control:
+        loop_var: wp_update_site
+        label: "{{ wp_update_site.name }}"
+
+- name: Select the sites to update
+  ansible.builtin.set_fact:
+    wp_update__targets: >-
+      {{ wp_update__sites | selectattr('name', 'in',
+           wp_update__report | dict2items | selectattr('value.status', 'eq', 'pending') | map(attribute='key') | list)
+         | list }}
+
+- name: Stop when there is nothing to do
+  when: wp_update__targets | length == 0 or wp_update_dry_run | bool
+  block:
+    - name: Report
+      ansible.builtin.include_tasks: report.yml
+
+    - name: End host
+      ansible.builtin.meta: end_host
+
+- name: Export databases
+  timeout: "{{ wp_update_command_timeout }}"
+  when: wp_update_db_backup | bool
+  block:
+    - name: Export databases
+      ansible.builtin.include_tasks: backup_db.yml
+      loop: "{{ wp_update__targets }}"
+      loop_control:
+        loop_var: wp_update_site
+        label: "{{ wp_update_site.name }}"
+
+- name: Take snapshot
+  ansible.builtin.include_tasks: "providers/{{ wp_update_snapshot_provider }}/snapshot.yml"
+
+- name: Update and verify, roll back on failure
+  block:
+    # A hung command (WP-CLI waiting on the database...) fails the task, so it is rolled
+    # back too. The rollback itself is not limited.
+    - name: Update and verify
+      timeout: "{{ wp_update_command_timeout }}"
+      block:
+        - name: Update sites
+          ansible.builtin.include_tasks: update_site.yml
+          loop: "{{ wp_update__targets }}"
+          loop_control:
+            loop_var: wp_update_site
+            label: "{{ wp_update_site.name }}"
+
+        - name: Reload services
+          ansible.builtin.systemd_service:
+            name: "{{ item }}"
+            state: reloaded
+          loop: "{{ wp_update_reload_services }}"
+
+        # After every site is updated: sites can share plugins, caches or PHP-FPM pools
+        - name: Verify sites
+          ansible.builtin.include_tasks: verify_site.yml
+          loop: "{{ wp_update__targets }}"
+          loop_control:
+            loop_var: wp_update_site
+            label: "{{ wp_update_site.name }}"
+
+  rescue:
+    - name: Roll back
+      ansible.builtin.include_tasks: rollback.yml
+
+- name: Report
+  ansible.builtin.include_tasks: report.yml
+
+- name: Fail the host after a rollback
+  ansible.builtin.fail:
+    msg: >-
+      Update failed ({{ wp_update__failure }}),
+      {{ 'rolled back to snapshot ' ~ wp_update__snapshot if wp_update__rolled_back else 'NOT rolled back' }}
+  when: wp_update__failed

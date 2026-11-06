@@ -1,0 +1,41 @@
+- name: Record failure
+  ansible.builtin.set_fact:
+    wp_update__failed: true
+    wp_update__failure: >-
+      {{ ansible_failed_task.name | default('?') }}:
+      {{ ansible_failed_result.stderr_lines | default([]) | select | first | default(ansible_failed_result.msg | default('?')) }}
+    # Sites not verified yet when the run stopped
+    wp_update__report: >-
+      {%- set out = {} -%}
+      {%- for name, site in wp_update__report.items() -%}
+      {%-   set _ = out.update({name: site | combine({'status': 'aborted'} if site.status == 'pending' else {})}) -%}
+      {%- endfor -%}
+      {{ out }}
+
+# A failed rollback must still reach the report and the final message in main.yml
+- name: Roll back and check the sites
+  block:
+    - name: Roll back snapshot
+      ansible.builtin.include_tasks: "providers/{{ wp_update_snapshot_provider }}/rollback.yml"
+
+    - name: Check sites after rollback
+      when: wp_update__rolled_back
+      block:
+        - name: Wait for the host
+          ansible.builtin.wait_for_connection:
+            timeout: "{{ wp_update_rollback_timeout }}"
+
+        - name: Smoke test after rollback
+          ansible.builtin.include_tasks: rollback_check.yml
+          loop: "{{ wp_update__targets }}"
+          loop_control:
+            loop_var: wp_update_site
+            label: "{{ wp_update_site.name }}"
+
+  rescue:
+    - name: Record rollback failure
+      ansible.builtin.set_fact:
+        wp_update__failure: >-
+          {{ wp_update__failure }}; then
+          {{ 'checking the sites after rollback' if wp_update__rolled_back else 'ROLLBACK' }} failed:
+          {{ ansible_failed_task.name | default('?') }}: {{ ansible_failed_result.msg | default('?') }}

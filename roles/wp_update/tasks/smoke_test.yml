@@ -1,0 +1,41 @@
+# In: wp_update_site, wp_update__url, wp_update__smoke_phase (before, after, rollback)
+# Out: wp_update__smoke_errors
+- name: Smoke test {{ wp_update__smoke_phase }} ({{ wp_update_site.name }})
+  ansible.builtin.uri:
+    url: "{{ wp_update__url ~ item.path ~ ('&' if '?' in item.path else '?') ~ 'wp-safe-update=' ~ wp_update__ts ~ '-' ~ wp_update__smoke_phase }}"
+    return_content: true
+    status_code: "{{ item.status | default(200) }}"
+    timeout: "{{ wp_update_smoke_timeout }}"
+    validate_certs: "{{ wp_update_smoke_validate_certs }}"
+    headers: "{{ wp_update_smoke_headers }}"
+  delegate_to: localhost
+  become: false
+  loop: "{{ wp_update_site.smoke_checks | default(wp_update_smoke_checks) }}"
+  loop_control:
+    label: "{{ wp_update__url ~ item.path }}"
+  register: wp_update__smoke
+  failed_when: false
+  # Headers may hold credentials (basic auth)
+  no_log: "{{ wp_update_smoke_headers | length > 0 }}"
+  # One retry absorbs a transient error (proxy, cold cache). After a rollback, the host
+  # can still be starting its services: retry for up to 2 minutes.
+  until: wp_update__smoke.status | default(-1) | int == item.status | default(200) | int
+  retries: "{{ 12 if wp_update__smoke_phase == 'rollback' else 1 }}"
+  delay: 10
+
+- name: Collect smoke test errors ({{ wp_update_site.name }})
+  ansible.builtin.set_fact:
+    wp_update__smoke_errors: >-
+      {%- set out = [] -%}
+      {%- for r in wp_update__smoke.results -%}
+      {%-   set body = r.content | default('') -%}
+      {%-   set bad = wp_update_smoke_fail_patterns | select('in', body) | list -%}
+      {%-   if r.status | default(-1) | int != r.item.status | default(200) | int -%}
+      {%-     set _ = out.append(r.item.path ~ ': HTTP ' ~ r.status | default('?') ~ ' ' ~ r.msg | default('')) -%}
+      {%-   elif bad -%}
+      {%-     set _ = out.append(r.item.path ~ ': page contains "' ~ bad[0] ~ '"') -%}
+      {%-   elif r.item.contains is defined and r.item.contains not in body -%}
+      {%-     set _ = out.append(r.item.path ~ ': page lacks "' ~ r.item.contains ~ '"') -%}
+      {%-   endif -%}
+      {%- endfor -%}
+      {{ out }}

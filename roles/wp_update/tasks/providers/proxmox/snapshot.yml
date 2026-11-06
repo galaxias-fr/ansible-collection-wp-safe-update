@@ -1,0 +1,54 @@
+- name: Proxmox snapshot
+  delegate_to: localhost
+  become: false
+  module_defaults:
+    group/community.proxmox.proxmox: "{{ wp_update__proxmox_api }}"
+  block:
+    - name: Find the VM
+      community.proxmox.proxmox_vm_info:
+        vmid: "{{ wp_update_proxmox_vmid | default(omit, true) }}"
+        name: "{{ omit if wp_update_proxmox_vmid | default('', true) else wp_update_proxmox_name }}"
+      register: wp_update__vm_info
+
+    - name: Check the VM was found
+      ansible.builtin.assert:
+        that: wp_update__vm_info.proxmox_vms | length == 1
+        fail_msg: >-
+          Expected 1 Proxmox VM/container for {{ inventory_hostname }}
+          (vmid={{ wp_update_proxmox_vmid | default('', true) or '-' }}, name={{ wp_update_proxmox_name }}),
+          found {{ wp_update__vm_info.proxmox_vms | length }}. Set wp_update_proxmox_vmid.
+        quiet: true
+
+    - name: Remember the VM
+      ansible.builtin.set_fact:
+        wp_update__vm: "{{ wp_update__vm_info.proxmox_vms[0] }}"
+
+    - name: Take snapshot {{ wp_update__snapshot_name }}
+      community.proxmox.proxmox_snap:
+        vmid: "{{ wp_update__vm.vmid }}"
+        snapname: "{{ wp_update__snapshot_name }}"
+        description: "Before WordPress update of {{ wp_update__targets | map(attribute='name') | join(', ') }}"
+        vmstate: "{{ wp_update_proxmox_vmstate | bool and wp_update__vm.type == 'qemu' }}"
+        timeout: "{{ wp_update_proxmox_timeout }}"
+        state: present
+
+    - name: Remember the snapshot
+      ansible.builtin.set_fact:
+        wp_update__snapshot: "{{ wp_update__snapshot_name }}"
+
+    # Done after taking the new one, so the VM is never left without a snapshot
+    - name: List snapshots
+      community.proxmox.proxmox_snap_info:
+        vmid: "{{ wp_update__vm.vmid }}"
+      register: wp_update__snapshots
+
+    - name: Remove previous snapshots
+      community.proxmox.proxmox_snap:
+        vmid: "{{ wp_update__vm.vmid }}"
+        snapname: "{{ item }}"
+        timeout: "{{ wp_update_proxmox_timeout }}"
+        state: absent
+      loop: >-
+        {{ wp_update__snapshots.snapshots | map(attribute='name')
+           | select('match', wp_update_snapshot_prefix | regex_escape)
+           | reject('eq', wp_update__snapshot_name) | list }}

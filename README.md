@@ -11,7 +11,7 @@ For each host (one VM or container that can host several sites):
    - **Integrity check** (`wp core/plugin verify-checksums`). A mismatch *before* the update can mean a compromise: the site is skipped, so the evidence isn't overwritten.
    - Lists the pending core, plugin and theme updates. With nothing to do, the host stops here, without a snapshot.
 2. **Database dump** of every site to update (`wp db export`, gzipped, only the latest one is kept).
-3. **Snapshot** of the VM through the Proxmox API (`wpupdate-<UTC timestamp>`). Older `wpupdate-*` snapshots are removed once the new one exists, so the latest one stays available until the next run.
+3. **Snapshot** of the VM through the Proxmox API (`wp-safe-update-<UTC timestamp>`). Older `wp-safe-update-*` snapshots are removed once the new one exists, so the latest one stays available until the next run.
 4. **Update**, per site, in maintenance mode: core (major or minor only), database, plugins, themes, translations, your extra commands (`wc update`...), object cache flush.
 5. **Verify**, per site
    - WordPress loads with all plugins and the theme (`wp eval`), which catches PHP fatal errors.
@@ -23,7 +23,7 @@ For each host (one VM or container that can host several sites):
 TASK [galaxias.wp_safe_update.wp_update : Report]
     wp_update__summary:
         host: web1
-        snapshot: wpupdate-20261028-155314
+        snapshot: wp-safe-update-20261028-155314
         rolled_back: false
         sites:
             blog:
@@ -41,7 +41,7 @@ Read this before you rely on it:
 
 - **The whole VM is rolled back.** If one site breaks, every site on that VM goes back to its state before the run, and so does anything else running on the VM.
 - **Writes made during the run are lost**: orders, comments, form submissions made between the snapshot and the rollback. Maintenance mode (on by default) keeps visitors out while each site is updated, not during the verification.
-- **A database on another machine is not in the snapshot.** The `wp db export` dumps (`/var/backups/wp-update` on the host) are your way back; restoring them is up to you.
+- **A database on another machine is not in the snapshot.** The `wp db export` dumps (`/var/backups/wp-safe-update` on the host) are your way back; restoring them is up to you.
 - **On ZFS storage**, Proxmox can only roll back to the most recent snapshot. The snapshot taken by the run is always the latest, unless someone takes another one during the run.
 
 ## Requirements
@@ -59,17 +59,18 @@ Read this before you rely on it:
 ## Install
 
 ```bash
-ansible-galaxy collection install git+https://github.com/galaxias/ansible-wp-safe-update.git
+ansible-galaxy collection install galaxias.wp_safe_update
 ```
 
 or in `requirements.yml`:
 
 ```yaml
 collections:
-  - name: https://github.com/galaxias/ansible-wp-safe-update.git
-    type: git
-    version: v0.1.0
+  - name: galaxias.wp_safe_update
+    version: ">=0.1.0"
 ```
+
+Every option is documented in `ansible-doc -t role galaxias.wp_safe_update.wp_update`.
 
 ## Usage
 
@@ -90,26 +91,28 @@ wordpress:
 Then call the role from a playbook of your own:
 
 ```yaml
-# wp-update.yml
+# wp-safe-update.yml
 - name: Safely update WordPress sites
   hosts: wordpress
   gather_facts: false   # not needed by the role
   become: true          # WP-CLI runs as each site's owner through runuser
   serial: 1             # one VM at a time
+  max_fail_percentage: 0  # stop at the first failed VM
   roles:
     - role: galaxias.wp_safe_update.wp_update
 ```
 
 ```bash
 # What would be updated, without snapshot or changes
-ansible-playbook wp-update.yml -i inventory.yml -K -e wp_update_dry_run=true
+ansible-playbook wp-safe-update.yml -i inventory.yml -K -e wp_update_dry_run=true
 
 # Update
-ansible-playbook wp-update.yml -i inventory.yml -K
+ansible-playbook wp-safe-update.yml -i inventory.yml -K
 ```
 
-With `serial`, a failed batch stops the run: a plugin update that broke the sites of one VM
-is likely to break the next one too. Raise it to handle several VMs at once.
+`max_fail_percentage: 0` stops the run as soon as one VM fails: a plugin update that broke
+the sites of one VM is likely to break the next one too. Raise `serial` to update several
+VMs at once.
 
 ### Proxmox API token
 
@@ -118,10 +121,10 @@ Minimal privileges: read the VM, snapshot, roll back, start.
 ```bash
 pveum role add WPUpdate --privs "VM.Audit,VM.Snapshot,VM.Snapshot.Rollback,VM.PowerMgmt"
 pveum user add ansible@pve
-pveum user token add ansible@pve wp-update --privsep 1
+pveum user token add ansible@pve wp-safe-update --privsep 1
 # With privilege separation, the token gets the intersection of its own ACLs and the user's
 pveum acl modify /vms --users ansible@pve --roles WPUpdate
-pveum acl modify /vms --tokens 'ansible@pve!wp-update' --roles WPUpdate
+pveum acl modify /vms --tokens 'ansible@pve!wp-safe-update' --roles WPUpdate
 ```
 
 Restrict `/vms` to a pool (`/pool/<name>`) if you like. With `wp_update_proxmox_vmstate: true`
@@ -130,7 +133,7 @@ Restrict `/vms` to a pool (`/pool/<name>`) if you like. With `wp_update_proxmox_
 ```yaml
 wp_update_proxmox_api_host: pve.example.com
 wp_update_proxmox_api_user: ansible@pve
-wp_update_proxmox_api_token_id: wp-update
+wp_update_proxmox_api_token_id: wp-safe-update
 wp_update_proxmox_api_token_secret: "{{ vault_wp_update_proxmox_token_secret }}"
 ```
 
@@ -163,17 +166,21 @@ contributions are welcome.
 ## Development
 
 ```bash
-git clone https://github.com/galaxias/ansible-wp-safe-update.git
+git clone https://github.com/galaxias-fr/ansible-collection-wp-safe-update.git
 # Use it from another project without reinstalling after each change
 mkdir -p collections/ansible_collections/galaxias
-ln -s /path/to/ansible-wp-safe-update collections/ansible_collections/galaxias/wp_safe_update
+ln -s /path/to/ansible-collection-wp-safe-update collections/ansible_collections/galaxias/wp_safe_update
 # ansible.cfg: collections_path = ./collections:~/.ansible/collections
 ```
 
-`ansible-lint` runs in CI. To test without Proxmox, a Debian container with WP-CLI and an
-older WordPress install, used with `wp_update_snapshot_provider: none`, covers everything
-but the snapshot itself.
+To try changes without Proxmox, point the role at a test VM or container with an older
+WordPress install and `wp_update_snapshot_provider: none`: it covers everything but the
+snapshot itself.
 
-## License
+Checks run by the CI:
 
-GPL-3.0-or-later
+```bash
+ansible-lint
+# from collections/ansible_collections/galaxias/wp_safe_update
+ansible-test sanity --docker
+```
